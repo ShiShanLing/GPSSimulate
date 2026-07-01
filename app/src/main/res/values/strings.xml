@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">GPSSimulate</string>
+    <string name="mock_notification_channel">模拟定位</string>
+    <string name="mock_notification_title">正在模拟 GPS 位置</string>
+    <string name="mock_notification_text">纬度: %1$.6f, 经度: %2$.6f</string>
+    <string name="preset_locations">预设位置</string>
+    <string name="preset_location_item">%1$s (%2$.4f, %3$.4f)</string>
+    <string name="preset_add_entry">添加快捷定位…</string>
+    <string name="preset_add_dialog_title">添加快捷定位</string>
+    <string name="preset_add_dialog_hint">苏州, 31.3167, 120.6167</string>
+    <string name="preset_add_dialog_message">输入格式：城市, 纬度, 经度。逗号分隔，空格会自动去除。</string>
+    <string name="preset_add_dialog_confirm">添加</string>
+    <string name="preset_add_dialog_cancel">取消</string>
+    <string name="mock_setup_dialog_title">需要设置模拟定位</string>
+    <string name="mock_setup_dialog_message">请先在开发者选项中，将本应用设为「模拟位置信息应用」。设置完成并返回本应用后，此提示将自动消失。</string>
+    <string name="mock_setup_dialog_confirm">打开开发者选项</string>
+    <string name="mock_setup_dialog_retry">我已设置，刷新</string>
+</resources>
