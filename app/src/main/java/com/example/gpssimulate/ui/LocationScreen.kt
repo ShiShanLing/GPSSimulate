@@ -58,22 +58,31 @@ import com.example.gpssimulate.location.MockLocationChecker
 import com.example.gpssimulate.location.PresetLocation
 import com.example.gpssimulate.location.PresetLocationParser
 import com.example.gpssimulate.location.PresetLocationRepository
+import com.example.gpssimulate.map.GeoCoordinateConverter
 import com.example.gpssimulate.service.MockLocationService
-import org.osmdroid.events.MapListener
-import org.osmdroid.events.ScrollEvent
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
+import com.baidu.mapapi.map.BaiduMap
+import com.baidu.mapapi.map.MapStatus
+import com.baidu.mapapi.map.MapStatusUpdateFactory
+import com.baidu.mapapi.map.MapView
 
-private val DEFAULT_LOCATION = GeoPoint(39.9042, 116.4074)
+private const val DEFAULT_LATITUDE = 39.9042
+private const val DEFAULT_LONGITUDE = 116.4074
+private const val DEFAULT_MAP_ZOOM = 16f
+
+private fun moveMapToWgs84(mapView: MapView?, latitude: Double, longitude: Double) {
+    val bd09 = GeoCoordinateConverter.wgs84ToBd09(latitude, longitude)
+    mapView?.map?.animateMapStatus(
+        MapStatusUpdateFactory.newLatLngZoom(bd09, DEFAULT_MAP_ZOOM)
+    )
+}
 
 @Composable
 fun LocationScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    var latitude by remember { mutableDoubleStateOf(DEFAULT_LOCATION.latitude) }
-    var longitude by remember { mutableDoubleStateOf(DEFAULT_LOCATION.longitude) }
+    var latitude by remember { mutableDoubleStateOf(DEFAULT_LATITUDE) }
+    var longitude by remember { mutableDoubleStateOf(DEFAULT_LONGITUDE) }
     var hasLocationPermission by remember { mutableStateOf(false) }
     var isMockApp by remember { mutableStateOf(MockLocationChecker.isMockLocationApp(context)) }
     var isMocking by remember { mutableStateOf(false) }
@@ -100,8 +109,7 @@ fun LocationScreen(modifier: Modifier = Modifier) {
                 locationStatus = null
                 latitude = lat
                 longitude = lng
-                mapView?.controller?.setZoom(16.0)
-                mapView?.controller?.animateTo(GeoPoint(lat, lng))
+                mapView?.let { moveMapToWgs84(it, lat, lng) }
             },
             onFailure = { message ->
                 isLocating = false
@@ -114,8 +122,7 @@ fun LocationScreen(modifier: Modifier = Modifier) {
         locationStatus = null
         latitude = preset.latitude
         longitude = preset.longitude
-        mapView?.controller?.setZoom(16.0)
-        mapView?.controller?.animateTo(GeoPoint(preset.latitude, preset.longitude))
+        mapView?.let { moveMapToWgs84(it, preset.latitude, preset.longitude) }
         if (isMocking) {
             MockLocationService.update(context, preset.latitude, preset.longitude)
         }
@@ -167,7 +174,7 @@ fun LocationScreen(modifier: Modifier = Modifier) {
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            mapView?.onDetach()
+            mapView?.onDestroy()
         }
     }
 
@@ -182,35 +189,42 @@ fun LocationScreen(modifier: Modifier = Modifier) {
                     modifier = Modifier.fillMaxSize(),
                     factory = { ctx ->
                         MapView(ctx).apply {
-                            setTileSource(TileSourceFactory.MAPNIK)
-                            setMultiTouchControls(true)
-                            controller.setZoom(16.0)
-                            controller.setCenter(GeoPoint(latitude, longitude))
+                            map.isMyLocationEnabled = false
+                            val initialBd09 = GeoCoordinateConverter.wgs84ToBd09(latitude, longitude)
+                            map.setMapStatus(
+                                MapStatusUpdateFactory.newLatLngZoom(initialBd09, DEFAULT_MAP_ZOOM)
+                            )
 
                             val scrollHandler = Handler(Looper.getMainLooper())
                             var scrollRunnable: Runnable? = null
 
-                            addMapListener(object : MapListener {
-                                override fun onScroll(event: ScrollEvent?): Boolean {
+                            map.setOnMapStatusChangeListener(object : BaiduMap.OnMapStatusChangeListener {
+                                override fun onMapStatusChangeStart(status: MapStatus?) = Unit
+
+                                override fun onMapStatusChangeStart(status: MapStatus?, reason: Int) = Unit
+
+                                override fun onMapStatusChange(status: MapStatus?) = Unit
+
+                                override fun onMapStatusChangeFinish(status: MapStatus?) {
                                     scrollRunnable?.let(scrollHandler::removeCallbacks)
                                     scrollRunnable = Runnable {
-                                        val center = mapCenter
-                                        latitude = center.latitude
-                                        longitude = center.longitude
+                                        val target = status?.target ?: return@Runnable
+                                        val (wgsLat, wgsLng) = GeoCoordinateConverter.bd09ToWgs84(
+                                            target.latitude,
+                                            target.longitude,
+                                        )
+                                        latitude = wgsLat
+                                        longitude = wgsLng
                                         if (isMockingHolder[0]) {
                                             MockLocationService.update(
                                                 context,
                                                 latitude,
-                                                longitude
+                                                longitude,
                                             )
                                         }
                                     }
                                     scrollHandler.postDelayed(scrollRunnable!!, 300)
-                                    return false
                                 }
-
-                                override fun onZoom(event: org.osmdroid.events.ZoomEvent?): Boolean =
-                                    false
                             })
 
                             mapView = this
@@ -339,6 +353,15 @@ fun LocationScreen(modifier: Modifier = Modifier) {
                                 Text("开始模拟", modifier = Modifier.padding(start = 4.dp))
                             }
                         }
+                    }
+
+                    if (isMocking) {
+                        Text(
+                            text = stringResource(R.string.mock_tip_disable_gps),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
                     }
                 }
             }

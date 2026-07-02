@@ -1,11 +1,18 @@
 package com.example.gpssimulate
 
 import android.app.Application
-import org.osmdroid.config.Configuration
+import com.baidu.mapapi.CoordType
+import com.baidu.mapapi.SDKInitializer
+import com.baidu.mapapi.common.BaiduMapSDKException
 
 class GPSSimulateApp : Application() {
     override fun onCreate() {
         super.onCreate()
-        Configuration.getInstance().userAgentValue = packageName
+        SDKInitializer.setAgreePrivacy(applicationContext, true)
+        try {
+            SDKInitializer.initialize(applicationContext)
+            SDKInitializer.setCoordType(CoordType.BD09LL)
+        } catch (_: BaiduMapSDKException) {
+        }
     }
 }

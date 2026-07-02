@@ -4,118 +4,190 @@ import android.content.Context
 import android.location.Criteria
 import android.location.Location
 import android.location.LocationManager
+import android.location.LocationProvider
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import com.google.android.gms.location.LocationServices
 
 /**
- * 通过系统 Test Provider 注入模拟坐标。
- * 同时覆盖 GPS 与 NETWORK 两种来源，并周期性推送更新，
- * 与市面上多数「模拟 GPS」类 App 的做法一致。
+ * 通过系统 Test Provider + Google 融合定位 Mock 注入模拟坐标。
+ * 多数第三方 App 使用 FusedLocationProvider，仅 mock GPS/NETWORK 往往无效。
  */
 class MockLocationProvider(context: Context) {
 
+    private val appContext = context.applicationContext
     private val locationManager =
-        context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    private val fusedClient = LocationServices.getFusedLocationProviderClient(appContext)
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     private var isActive = false
+    private var fusedMockReady = false
     private var lastLatitude = 0.0
     private var lastLongitude = 0.0
+    private var pushSequence = 0L
+    private val activeProviders = mutableListOf<ProviderConfig>()
 
     fun startMocking(latitude: Double, longitude: Double) {
         isActive = true
+        fusedMockReady = false
+        pushSequence = 0L
         lastLatitude = latitude
         lastLongitude = longitude
-        setupProvider(
-            provider = LocationManager.GPS_PROVIDER,
+
+        activeProviders.clear()
+        activeProviders += ProviderConfig(
+            name = LocationManager.GPS_PROVIDER,
             requiresNetwork = false,
+            requiresSatellite = true,
             requiresCell = false,
-            accuracy = Criteria.ACCURACY_FINE,
+            criteriaAccuracy = Criteria.ACCURACY_FINE,
+            locationAccuracy = 3f,
         )
-        setupProvider(
-            provider = LocationManager.NETWORK_PROVIDER,
-            requiresNetwork = true,
-            requiresCell = true,
-            accuracy = Criteria.ACCURACY_COARSE,
+        activeProviders += ProviderConfig(
+            name = LocationManager.NETWORK_PROVIDER,
+            requiresNetwork = false,
+            requiresSatellite = false,
+            requiresCell = false,
+            criteriaAccuracy = Criteria.ACCURACY_COARSE,
+            locationAccuracy = 20f,
         )
-        pushLocation(latitude, longitude)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            activeProviders += ProviderConfig(
+                name = LocationManager.FUSED_PROVIDER,
+                requiresNetwork = false,
+                requiresSatellite = false,
+                requiresCell = false,
+                criteriaAccuracy = Criteria.ACCURACY_FINE,
+                locationAccuracy = 3f,
+            )
+        }
+
+        activeProviders.forEach { config ->
+            setupProvider(config)
+        }
+
+        fusedClient.setMockMode(true)
+            .addOnSuccessListener {
+                fusedMockReady = true
+                Log.d(TAG, "Fused mock mode enabled")
+                pushAllLocations(latitude, longitude)
+                burstPush()
+            }
+            .addOnFailureListener { error ->
+                fusedMockReady = false
+                Log.w(TAG, "Fused mock mode unavailable, using LocationManager only", error)
+                pushAllLocations(latitude, longitude)
+                burstPush()
+            }
     }
 
     fun setLocation(latitude: Double, longitude: Double) {
         if (!isActive) return
         lastLatitude = latitude
         lastLongitude = longitude
-        pushLocation(latitude, longitude)
+        pushAllLocations(latitude, longitude)
     }
 
-    /** 周期性调用，让依赖位置监听的 App 持续收到更新 */
     fun tick() {
         if (!isActive) return
-        pushLocation(lastLatitude, lastLongitude)
+        pushAllLocations(lastLatitude, lastLongitude)
     }
 
     fun stopMocking() {
         if (!isActive) return
-        listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER).forEach { provider ->
-            try {
-                locationManager.setTestProviderEnabled(provider, false)
-                locationManager.removeTestProvider(provider)
-            } catch (_: Exception) {
-            }
-        }
         isActive = false
+        fusedMockReady = false
+        mainHandler.removeCallbacksAndMessages(null)
+
+        fusedClient.setMockMode(false)
+            .addOnFailureListener { error ->
+                Log.w(TAG, "Failed to disable fused mock mode", error)
+            }
+
+        activeProviders.toList().forEach { config ->
+            teardownProvider(config.name)
+        }
+        activeProviders.clear()
     }
 
-    private fun setupProvider(
-        provider: String,
-        requiresNetwork: Boolean,
-        requiresCell: Boolean,
-        accuracy: Int,
-    ) {
+    private fun burstPush() {
+        repeat(BURST_COUNT) { index ->
+            mainHandler.postDelayed({
+                if (isActive) {
+                    pushAllLocations(lastLatitude, lastLongitude)
+                }
+            }, (index + 1) * BURST_DELAY_MS)
+        }
+    }
+
+    private fun pushAllLocations(latitude: Double, longitude: Double) {
+        val (time, elapsed) = nextTimestamps()
+        activeProviders.forEach { config ->
+            pushToTestProvider(
+                provider = config.name,
+                latitude = latitude,
+                longitude = longitude,
+                accuracy = config.locationAccuracy,
+                time = time,
+                elapsed = elapsed,
+            )
+        }
+        pushToFused(latitude, longitude, time, elapsed)
+    }
+
+    private fun nextTimestamps(): Pair<Long, Long> {
+        pushSequence += 1
+        return System.currentTimeMillis() to
+            SystemClock.elapsedRealtimeNanos() + pushSequence
+    }
+
+    private fun setupProvider(config: ProviderConfig) {
+        val provider = config.name
         try {
             locationManager.removeTestProvider(provider)
         } catch (_: Exception) {
         }
 
-        locationManager.addTestProvider(
-            provider,
-            requiresNetwork,
-            false,
-            requiresCell,
-            false,
-            true,
-            true,
-            true,
-            Criteria.POWER_LOW,
-            accuracy,
-        )
-        locationManager.setTestProviderEnabled(provider, true)
+        try {
+            locationManager.addTestProvider(
+                provider,
+                config.requiresNetwork,
+                config.requiresSatellite,
+                config.requiresCell,
+                false,
+                true,
+                true,
+                true,
+                Criteria.POWER_LOW,
+                config.criteriaAccuracy,
+            )
+            locationManager.setTestProviderEnabled(provider, true)
+            locationManager.setTestProviderStatus(
+                provider,
+                LocationProvider.AVAILABLE,
+                null,
+                System.currentTimeMillis(),
+            )
+        } catch (error: Exception) {
+            Log.e(TAG, "setup provider failed: $provider", error)
+            activeProviders.removeAll { it.name == provider }
+        }
     }
 
-    private fun pushLocation(latitude: Double, longitude: Double) {
-        val now = System.currentTimeMillis()
-        val elapsed = SystemClock.elapsedRealtimeNanos()
-
-        pushToProvider(
-            provider = LocationManager.GPS_PROVIDER,
-            latitude = latitude,
-            longitude = longitude,
-            accuracy = 1f,
-            time = now,
-            elapsed = elapsed,
-        )
-        pushToProvider(
-            provider = LocationManager.NETWORK_PROVIDER,
-            latitude = latitude,
-            longitude = longitude,
-            accuracy = 10f,
-            time = now,
-            elapsed = elapsed,
-        )
+    private fun teardownProvider(provider: String) {
+        try {
+            locationManager.setTestProviderEnabled(provider, false)
+            locationManager.removeTestProvider(provider)
+        } catch (_: Exception) {
+        }
     }
 
-    private fun pushToProvider(
+    private fun pushToTestProvider(
         provider: String,
         latitude: Double,
         longitude: Double,
@@ -124,34 +196,87 @@ class MockLocationProvider(context: Context) {
         elapsed: Long,
     ) {
         try {
-            val location = Location(provider).apply {
-                this.latitude = latitude
-                this.longitude = longitude
-                altitude = 10.0
-                this.accuracy = accuracy
-                bearing = 0f
-                speed = 0f
-                this.time = time
-                elapsedRealtimeNanos = elapsed
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    bearingAccuracyDegrees = 0.1f
-                    verticalAccuracyMeters = 1f
-                    speedAccuracyMetersPerSecond = 0.01f
-                }
-                extras = Bundle().apply {
-                    putInt("satellites", 12)
-                }
-            }
+            val location = buildLocation(
+                provider = provider,
+                latitude = latitude,
+                longitude = longitude,
+                accuracy = accuracy,
+                time = time,
+                elapsed = elapsed,
+            )
+            LocationSanitizer.stripMockFlags(location)
             locationManager.setTestProviderLocation(provider, location)
-        } catch (e: SecurityException) {
-            Log.e(TAG, "push location failed for $provider", e)
-            throw e
-        } catch (e: Exception) {
-            Log.e(TAG, "push location failed for $provider", e)
+        } catch (error: SecurityException) {
+            Log.e(TAG, "push location failed for $provider", error)
+            throw error
+        } catch (error: Exception) {
+            Log.e(TAG, "push location failed for $provider", error)
         }
     }
 
+    private fun pushToFused(
+        latitude: Double,
+        longitude: Double,
+        time: Long,
+        elapsed: Long,
+    ) {
+        if (!fusedMockReady) return
+        val location = buildLocation(
+            provider = FUSED_PROVIDER_NAME,
+            latitude = latitude,
+            longitude = longitude,
+            accuracy = 3f,
+            time = time,
+            elapsed = elapsed,
+        )
+        LocationSanitizer.stripMockFlags(location)
+        fusedClient.setMockLocation(location)
+            .addOnFailureListener { error ->
+                Log.w(TAG, "setMockLocation failed", error)
+            }
+    }
+
+    private fun buildLocation(
+        provider: String,
+        latitude: Double,
+        longitude: Double,
+        accuracy: Float,
+        time: Long,
+        elapsed: Long,
+    ): Location {
+        return Location(provider).apply {
+            this.latitude = latitude
+            this.longitude = longitude
+            altitude = 35.0
+            this.accuracy = accuracy
+            bearing = 0f
+            speed = 0f
+            this.time = time
+            elapsedRealtimeNanos = elapsed
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                bearingAccuracyDegrees = 0.1f
+                verticalAccuracyMeters = 1f
+                speedAccuracyMetersPerSecond = 0.01f
+            }
+            extras = Bundle().apply {
+                putInt("satellites", 8)
+            }
+        }
+    }
+
+    private data class ProviderConfig(
+        val name: String,
+        val requiresNetwork: Boolean,
+        val requiresSatellite: Boolean,
+        val requiresCell: Boolean,
+        val criteriaAccuracy: Int,
+        val locationAccuracy: Float,
+    )
+
     companion object {
         private const val TAG = "MockLocationProvider"
+        private const val FUSED_PROVIDER_NAME = "fused"
+        private const val BURST_COUNT = 5
+        private const val BURST_DELAY_MS = 80L
     }
 }

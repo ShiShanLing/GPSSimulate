@@ -1,5 +1,6 @@
 <resources>
     <string name="app_name">GPSSimulate</string>
+    <string name="baidu_map_api_key">JgMwj7FtlHHRg68fa7aZAv38eDQCTDvj</string>
     <string name="mock_notification_channel">模拟定位</string>
     <string name="mock_notification_title">正在模拟 GPS 位置</string>
     <string name="mock_notification_text">纬度: %1$.6f, 经度: %2$.6f</string>
@@ -15,4 +16,5 @@
     <string name="mock_setup_dialog_message">请先在开发者选项中，将本应用设为「模拟位置信息应用」。设置完成并返回本应用后，此提示将自动消失。</string>
     <string name="mock_setup_dialog_confirm">打开开发者选项</string>
     <string name="mock_setup_dialog_retry">我已设置，刷新</string>
+    <string name="mock_tip_disable_gps">若其他 App 仍显示真实位置，请在系统设置中暂时关闭 GPS，仅保留网络定位后再试。</string>
 </resources>

@@ -41,8 +41,12 @@ class MockLocationService : Service() {
             ACTION_UPDATE -> {
                 latitude = intent.getDoubleExtra(EXTRA_LATITUDE, 0.0)
                 longitude = intent.getDoubleExtra(EXTRA_LONGITUDE, 0.0)
-                mockProvider?.setLocation(latitude, longitude)
-                updateNotification(latitude, longitude)
+                if (mockProvider == null) {
+                    startMocking(latitude, longitude)
+                } else {
+                    mockProvider?.setLocation(latitude, longitude)
+                    updateNotification(latitude, longitude)
+                }
             }
             ACTION_STOP -> {
                 stopMocking()
@@ -119,7 +123,7 @@ class MockLocationService : Service() {
 
         private const val CHANNEL_ID = "mock_location"
         private const val NOTIFICATION_ID = 1001
-        private const val TICK_INTERVAL_MS = 1000L
+        private const val TICK_INTERVAL_MS = 300L
 
         fun start(context: Context, latitude: Double, longitude: Double) {
             val intent = Intent(context, MockLocationService::class.java).apply {
@@ -136,7 +140,7 @@ class MockLocationService : Service() {
                 putExtra(EXTRA_LATITUDE, latitude)
                 putExtra(EXTRA_LONGITUDE, longitude)
             }
-            context.startService(intent)
+            context.startForegroundService(intent)
         }
 
         fun stop(context: Context) {
