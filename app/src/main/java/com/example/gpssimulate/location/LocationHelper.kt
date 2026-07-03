@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.LocationCallback
@@ -36,6 +37,7 @@ object LocationHelper {
     @SuppressLint("MissingPermission")
     fun fetchCurrentLocation(
         context: Context,
+        forceFreshLocation: Boolean = false,
         onSuccess: (latitude: Double, longitude: Double) -> Unit,
         onFailure: (message: String) -> Unit
     ) {
@@ -49,17 +51,60 @@ object LocationHelper {
         }
 
         val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+        var delivered = false
+        val mainHandler = Handler(Looper.getMainLooper())
+        var timeoutRunnable: Runnable? = null
+
+        fun deliverSuccess(latitude: Double, longitude: Double) {
+            if (delivered) return
+            delivered = true
+            timeoutRunnable?.let(mainHandler::removeCallbacks)
+            onSuccess(latitude, longitude)
+        }
+
+        fun deliverFailure(message: String) {
+            if (delivered) return
+            delivered = true
+            timeoutRunnable?.let(mainHandler::removeCallbacks)
+            onFailure(message)
+        }
+
+        timeoutRunnable = Runnable {
+            deliverFailure("定位超时，请确保已开启 GPS 并到开阔地带重试")
+        }.also { runnable ->
+            mainHandler.postDelayed(runnable, LOCATION_TIMEOUT_MS)
+        }
+
+        if (forceFreshLocation) {
+            requestFreshLocation(
+                context = context,
+                fusedClient = fusedClient,
+                onSuccess = ::deliverSuccess,
+                onFailure = ::deliverFailure,
+            )
+            return
+        }
 
         fusedClient.lastLocation
             .addOnSuccessListener { lastLocation ->
                 if (lastLocation != null) {
-                    onSuccess(lastLocation.latitude, lastLocation.longitude)
+                    deliverSuccess(lastLocation.latitude, lastLocation.longitude)
                     return@addOnSuccessListener
                 }
-                requestFreshLocation(context, fusedClient, onSuccess, onFailure)
+                requestFreshLocation(
+                    context = context,
+                    fusedClient = fusedClient,
+                    onSuccess = ::deliverSuccess,
+                    onFailure = ::deliverFailure,
+                )
             }
             .addOnFailureListener {
-                requestFreshLocation(context, fusedClient, onSuccess, onFailure)
+                requestFreshLocation(
+                    context = context,
+                    fusedClient = fusedClient,
+                    onSuccess = ::deliverSuccess,
+                    onFailure = ::deliverFailure,
+                )
             }
     }
 
@@ -116,4 +161,6 @@ object LocationHelper {
                 onFailure("定位失败，请确认已开启 GPS 且未在模拟定位中")
             }
     }
+
+    private const val LOCATION_TIMEOUT_MS = 3_000L
 }

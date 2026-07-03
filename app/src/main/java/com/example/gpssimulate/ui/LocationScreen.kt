@@ -69,6 +69,22 @@ private const val DEFAULT_LATITUDE = 39.9042
 private const val DEFAULT_LONGITUDE = 116.4074
 private const val DEFAULT_MAP_ZOOM = 16f
 
+private fun openDeveloperSettings(context: android.content.Context) {
+    val intentActions = listOf(
+        "android.settings.APPLICATION_DEVELOPMENT_SETTINGS",
+        Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS,
+        Settings.ACTION_DEVICE_INFO_SETTINGS,
+    )
+    for (action in intentActions) {
+        try {
+            context.startActivity(Intent(action))
+            return
+        } catch (_: Exception) {
+            // Try next fallback action.
+        }
+    }
+}
+
 private fun moveMapToWgs84(mapView: MapView?, latitude: Double, longitude: Double) {
     val bd09 = GeoCoordinateConverter.wgs84ToBd09(latitude, longitude)
     mapView?.map?.animateMapStatus(
@@ -86,6 +102,7 @@ fun LocationScreen(modifier: Modifier = Modifier) {
     var hasLocationPermission by remember { mutableStateOf(false) }
     var isMockApp by remember { mutableStateOf(MockLocationChecker.isMockLocationApp(context)) }
     var isMocking by remember { mutableStateOf(false) }
+    var forceFreshLocateOnce by remember { mutableStateOf(false) }
     var locationStatus by remember { mutableStateOf<String?>(null) }
     var isLocating by remember { mutableStateOf(false) }
     val presetRepository = remember { PresetLocationRepository(context) }
@@ -104,9 +121,11 @@ fun LocationScreen(modifier: Modifier = Modifier) {
         locationStatus = "正在定位..."
         LocationHelper.fetchCurrentLocation(
             context = context,
+            forceFreshLocation = forceFreshLocateOnce,
             onSuccess = { lat, lng ->
                 isLocating = false
                 locationStatus = null
+                forceFreshLocateOnce = false
                 latitude = lat
                 longitude = lng
                 mapView?.let { moveMapToWgs84(it, lat, lng) }
@@ -334,6 +353,7 @@ fun LocationScreen(modifier: Modifier = Modifier) {
                                 onClick = {
                                     MockLocationService.stop(context)
                                     isMocking = false
+                                    forceFreshLocateOnce = true
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
@@ -343,8 +363,15 @@ fun LocationScreen(modifier: Modifier = Modifier) {
                         } else {
                             Button(
                                 onClick = {
-                                    MockLocationService.start(context, latitude, longitude)
-                                    isMocking = true
+                                    try {
+                                        MockLocationService.start(context, latitude, longitude)
+                                        isMocking = true
+                                        locationStatus = null
+                                    } catch (_: SecurityException) {
+                                        isMocking = false
+                                        isMockApp = MockLocationChecker.isMockLocationApp(context)
+                                        locationStatus = "请先在开发者选项中将本应用设为模拟定位应用"
+                                    }
                                 },
                                 modifier = Modifier.weight(1f),
                                 enabled = isMockApp
@@ -370,9 +397,7 @@ fun LocationScreen(modifier: Modifier = Modifier) {
         if (!isMockApp) {
             MockLocationSetupDialog(
                 onOpenSettings = {
-                    context.startActivity(
-                        Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
-                    )
+                    openDeveloperSettings(context)
                 },
                 onRefresh = {
                     isMockApp = MockLocationChecker.isMockLocationApp(context)
